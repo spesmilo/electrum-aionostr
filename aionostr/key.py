@@ -3,10 +3,11 @@ forked from https://github.com/jeffthibault/python-nostr.git
 """
 import secrets
 import base64
-import coincurve
+
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.hazmat.primitives import padding
 from hashlib import sha256
+import electrum_ecc as ecc
 
 from .delegation import Delegation
 from .event import Event
@@ -25,7 +26,7 @@ class PublicKey:
         return self.raw_bytes.hex()
 
     def verify_signed_message_hash(self, hash: str, sig: str) -> bool:
-        return coincurve.PublicKeyXOnly(self.raw_bytes).verify(
+        return ecc.ECPubkey(self.raw_bytes).schnorr_verify(
             bytes.fromhex(sig), bytes.fromhex(hash)
         )
 
@@ -44,8 +45,8 @@ class PrivateKey:
         else:
             self.raw_secret = secrets.token_bytes(32)
 
-        sk = coincurve.PrivateKey(self.raw_secret)
-        self.public_key = PublicKey(sk.public_key.format()[1:])
+        sk = ecc.ECPrivkey(self.raw_secret)
+        self.public_key = PublicKey(sk.get_public_key_bytes()[1:])
 
     @classmethod
     def from_nsec(cls, nsec: str):
@@ -62,13 +63,13 @@ class PrivateKey:
         return self.raw_secret.hex()
 
     def tweak_add(self, scalar: bytes) -> bytes:
-        sk = coincurve.PrivateKey(self.raw_secret)
+        sk = ecc.ECPrivkey(self.raw_secret)
         return sk.add(scalar)
 
     def compute_shared_secret(self, public_key_hex: str) -> bytes:
-        return coincurve.PrivateKey(self.raw_secret).ecdh(
-            bytes.fromhex("02" + public_key_hex)
-        )
+        privkey = ecc.ECPrivkey(self.raw_secret)
+        pubkey = ecc.ECPubkey(bytes.fromhex("02" + public_key_hex))
+        return privkey.ecdh(pubkey, hashfn=ecc.HASHFN_COPY_X)
 
     def encrypt_message(self, message: str, public_key_hex: str) -> str:
         padder = padding.PKCS7(128).padder()
@@ -103,8 +104,8 @@ class PrivateKey:
         return unpadded_data.decode()
 
     def sign_message_hash(self, hash: bytes) -> str:
-        sk = coincurve.PrivateKey(self.raw_secret)
-        sig = sk.sign_schnorr(hash, None)
+        sk = ecc.ECPrivkey(self.raw_secret)
+        sig = sk.schnorr_sign(hash)
         return sig.hex()
 
     def sign_event(self, event: Event) -> None:

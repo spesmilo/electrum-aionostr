@@ -4,7 +4,8 @@ forked from https://github.com/jeffthibault/python-nostr.git
 import time
 import functools
 from enum import IntEnum
-from coincurve import PrivateKey, PublicKeyXOnly as PublicKey
+import electrum_ecc as ecc
+from electrum_ecc import ECPrivkey, ECPubkey
 from hashlib import sha256
 
 try:
@@ -105,20 +106,20 @@ class Event:
         ).hexdigest()
 
     def sign(self, private_key_hex: str) -> None:
-        sk = PrivateKey(bytes.fromhex(private_key_hex))
-        sig = sk.sign_schnorr(bytes.fromhex(self.id), None)
+        sk = ECPrivkey(bytes.fromhex(private_key_hex))
+        sig = sk.schnorr_sign(bytes.fromhex(self.id))
         self.sig = sig.hex()
 
     def verify(self) -> bool:
         try:
-            pub_key = PublicKey(bytes.fromhex(self.pubkey))
+            pub_key = ECPubkey(bytes.fromhex(self.pubkey))
         except Exception as e:
             return False
         event_id = Event.compute_id(
             self.pubkey, self.created_at, self.kind, self.tags, self.content
         )
 
-        verified = pub_key.verify(
+        verified = pub_key.schnorr_verify(
             bytes.fromhex(self.sig),
             bytes.fromhex(event_id),
         )

@@ -11,11 +11,9 @@ with open("HISTORY.rst") as history_file:
     history = history_file.read()
 
 requirements = [
-    "Click>=7.0",
+    "electrum_ecc",
     "websockets",
     "cryptography>=37.0.4",
-    "pycparser>=2.21",
-    "coincurve>=20.0",
 ]
 
 test_requirements = [
@@ -49,11 +47,11 @@ setup(
     long_description=readme + "\n\n" + history,
     include_package_data=True,
     keywords="aionostr",
-    name="aionostr",
+    name="electrum-aionostr",
     packages=find_packages(include=["aionostr", "aionostr.*"]),
     test_suite="tests",
     tests_require=test_requirements,
-    url="https://github.com/davestgermain/aionostr",
-    version="0.20.0",
+    url="https://github.com/spesmilo/electrum-aionostr",
+    version="0.0.1",
     zip_safe=False,
 )

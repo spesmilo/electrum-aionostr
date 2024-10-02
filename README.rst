@@ -1,6 +1,10 @@
-========
-aionostr
-========
+=================
+electrum-aionostr
+=================
+
+
+This is a fork of aionostr that does not require Coincurve
+
 
 
 .. image:: https://img.shields.io/pypi/v/aionostr.svg
