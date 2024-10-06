@@ -110,7 +110,7 @@ async def _add_event(manager, event:dict=None, private_key='', kind=1, pubkey=''
         event_id = event.id
     else:
         event_id = event['id']
-    await manager.add_event(event, check_response=True)
+    await manager.add_event(event, check_response=False)
     return event_id
 
 async def add_event(relays, event:dict=None, private_key='', kind=1, pubkey='', content='', created_at=None, tags=None, direct_message='', verbose=False):

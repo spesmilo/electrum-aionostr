@@ -106,6 +106,7 @@ class Relay:
         try:
             await self.ws.send(dumps(message))
         except exceptions.ConnectionClosedError:
+            print('send: connection closed', self.url)
             await self.reconnect()
             await self.ws.send(dumps(message))
 
@@ -117,9 +118,9 @@ class Relay:
             response = await self.event_adds.get()
             return response[1]
 
-    async def subscribe(self, sub_id: str, *filters, queue=None):
+    def subscribe(self, sub_id: str, *filters, queue=None):
         self.subscriptions[sub_id] = Subscription(filters=filters, queue=queue or asyncio.Queue())
-        await self.send(["REQ", sub_id, *filters])
+        asyncio.create_task(self.send(["REQ", sub_id, *filters]))
         return self.subscriptions[sub_id].queue
 
     async def unsubscribe(self, sub_id):
@@ -205,7 +206,8 @@ class Manager:
             results.append(asyncio.create_task(getattr(relay, func)(*args, **kwargs)))
 
         self.log.debug("Waiting for %s", func)
-        return await asyncio.wait(results)
+        return_when = asyncio.ALL_COMPLETED if func == 'connect' else asyncio.FIRST_COMPLETED
+        return await asyncio.wait(results, return_when=return_when)
 
     async def connect(self):
         async with self._connectlock:
@@ -224,10 +226,10 @@ class Manager:
     async def add_event(self, event, check_response=False):
         return await self.broadcast('add_event', event, check_response=check_response)
 
-    async def subscribe(self, sub_id: str, *filters):
+    def subscribe(self, sub_id: str, *filters):
         queues = []
         for relay in self.relays:
-            queues.append(await relay.subscribe(sub_id, *filters))
+            queues.append(relay.subscribe(sub_id, *filters))
         queue = asyncio.Queue()
         self.subscriptions[sub_id] = asyncio.create_task(self.monitor_queues(queues, queue))
         return queue
@@ -246,7 +248,7 @@ class Manager:
 
     async def get_events(self, *filters, only_stored=True, single_event=False):
         sub_id = secrets.token_hex(4)
-        queue = await self.subscribe(sub_id, *filters)
+        queue = self.subscribe(sub_id, *filters)
         while True:
             event = await queue.get()
             if event is None:
