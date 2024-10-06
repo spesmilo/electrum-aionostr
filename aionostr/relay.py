@@ -183,21 +183,21 @@ class Manager:
 
     async def monitor_queues(self, queues, output):
         seen = set()
-        num = len(queues)
-        num_eose = 0
-        while True:
-            get_funcs = [queue.get() for queue in queues]
-            for func in asyncio.as_completed(get_funcs):
-                result = await func
+        async def func(queue):
+            while True:
+                result = await queue.get()
                 if result:
                     eid = result.id_bytes
                     if eid not in seen:
+                        print('eid', eid.hex())
                         await output.put(result)
                         seen.add(eid)
                 else:
-                    num_eose += 1
-                    if num_eose == num:
-                        await output.put(result)
+                    await output.put(None)
+
+        tasks = [func(queue) for queue in queues]
+        await asyncio.gather(*tasks)
+
 
     async def broadcast(self, func, *args, **kwargs):
         results = []
