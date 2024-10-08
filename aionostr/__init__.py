@@ -79,7 +79,7 @@ async def get_anything(anything:str, relays=None, verbose=False, stream=False, o
             return queue
 
 
-async def add_event(relays, event:dict=None, private_key='', kind=1, pubkey='', content='', created_at=None, tags=None, direct_message='', verbose=False):
+async def _add_event(manager, event:dict=None, private_key='', kind=1, pubkey='', content='', created_at=None, tags=None, direct_message=''):
     """
     Add an event to the network, using the given relays
     event can be specified (as a dict)
@@ -110,10 +110,21 @@ async def add_event(relays, event:dict=None, private_key='', kind=1, pubkey='', 
         event_id = event.id
     else:
         event_id = event['id']
-    async with Manager(relays, verbose=verbose, private_key=private_key) as man:
-        await man.add_event(event, check_response=True)
+    await manager.add_event(event, check_response=True)
     return event_id
 
+async def add_event(relays, event:dict=None, private_key='', kind=1, pubkey='', content='', created_at=None, tags=None, direct_message='', verbose=False):
+    async with Manager(relays, verbose=verbose, private_key=private_key) as man:
+        return await _add_event(
+            man,
+            event=event,
+            private_key=private_key,
+            kind=kind,
+            pubkey=pubkey,
+            content=content,
+            created_at=created_at,
+            tags=tags,
+            direct_message=direct_message)
 
 async def add_events(relays, event_iterator):
     async with Manager(relays) as man:
