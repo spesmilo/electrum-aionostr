@@ -4,7 +4,7 @@ import sys
 import logging
 from json import dumps
 from collections import defaultdict, namedtuple
-from typing import Optional, Iterable, Dict, List, Set, Any, TYPE_CHECKING
+from typing import Optional, Iterable, Dict, List, Set, Any, TYPE_CHECKING, AsyncGenerator
 from dataclasses import dataclass
 from .util import normalize_url
 
@@ -299,7 +299,7 @@ class Manager:
         result = await asyncio.wait_for(queue.get(), timeout=self._connect_timeout)
         return result
 
-    async def subscribe(self, sub_id: str, *filters):
+    async def subscribe(self, sub_id: str, *filters) -> asyncio.Queue[Optional[Event]]:
         """Apply the given filter to all relays and return a queue that collects incoming events"""
         relay_queues = []
         async with self._subscription_lock:
@@ -392,11 +392,16 @@ class Manager:
         await self.close()
         await self.taskgroup.__aexit__(ex_type, ex, tb)
 
-    async def get_events(self, *filters, only_stored=True, single_event=False):
+    async def get_events(
+        self,
+        *filters,
+        only_stored=True,
+        single_event=False
+    ) -> AsyncGenerator[Event, None]:
         sub_id = secrets.token_hex(4)
         queue = await self.subscribe(sub_id, *filters)
         while True:
-            event = await queue.get()
+            event: Optional[Event] = await queue.get()
             if event is None:
                 if only_stored:
                     break
