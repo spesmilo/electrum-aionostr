@@ -5,6 +5,7 @@ import time
 import functools
 from enum import IntEnum
 from hashlib import sha256
+from typing import Optional
 
 import electrum_ecc as ecc
 from electrum_ecc import ECPrivkey, ECPubkey
@@ -48,19 +49,24 @@ class Event:
         content: str = "",
         created_at: int = 0,
         kind: int = EventKind.TEXT_NOTE,
-        tags: "list[list[str]]" = [],
+        tags: "list[list[str]]" = None,
         id: str = None,
         sig: str = None,
+        expiration_ts: Optional[int] = None,
     ) -> None:
         if not isinstance(content, str):
             raise TypeError("Argument 'content' must be of type str")
         assert len(pubkey) == 64, f"got pubkey with unexpected len={len(pubkey)}, expected 64 char x-only hex"
+        if tags is None:
+            tags = []
         self.pubkey = pubkey
         self.content = content
         self.created_at = created_at or int(time.time())
         self.kind = int(kind)
         self.tags = tags
         self.sig = sig
+        if expiration_ts is not None:
+            self.add_expiration_tag(expiration_ts)
         if not id:
             id = Event.compute_id(
                 self.pubkey, self.created_at, self.kind, self.tags, self.content
@@ -106,6 +112,25 @@ class Event:
         return sha256(
             Event.serialize(public_key, created_at, kind, tags, content)
         ).hexdigest()
+
+    def expires_at(self) -> Optional[int]:
+        for tag in self.tags:
+            if len(tag) >= 2 and tag[0] == 'expiration':
+                try:
+                    return int(tag[1])
+                except Exception:
+                    continue
+        return None
+
+    def is_expired(self) -> bool:
+        if (expiration_ts := self.expires_at()) is not None:
+            return expiration_ts < time.time()
+        return False
+
+    def add_expiration_tag(self, expiration_ts: int):
+        assert self.expires_at() is None, "Duplicate expiration tags"
+        assert expiration_ts >= int(time.time()), f"Expiration is in the past: {expiration_ts=}"
+        self.tags.append(['expiration', str(expiration_ts)])
 
     def sign(self, private_key_hex: str) -> None:
         sk = ECPrivkey(bytes.fromhex(private_key_hex))
