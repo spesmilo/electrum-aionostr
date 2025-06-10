@@ -1,5 +1,12 @@
 # Release History / Changelog
 
+* **Release v0.0.11 (2025-06-10)**
+
+    - fix tests for Click>=8.2
+    - add expiration helper methods to Event class
+    - Manager.get_events: filter out events with future timestamps
+
+
 * **Release v0.0.10 (2025-05-08)**
 
     - bump max supported `aiorpcx` to `<0.26`
