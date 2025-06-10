@@ -6,12 +6,13 @@ from json import dumps
 from collections import defaultdict, namedtuple
 from typing import Optional, Iterable, Dict, List, Set, Any, TYPE_CHECKING, AsyncGenerator
 from dataclasses import dataclass
-from .util import normalize_url
+import time
 
 from aiohttp import ClientSession, client_exceptions
 import aiorpcx
 
 from .event import Event
+from .util import normalize_url
 
 if TYPE_CHECKING:
     from logging import Logger
@@ -395,8 +396,9 @@ class Manager:
     async def get_events(
         self,
         *filters,
-        only_stored=True,
-        single_event=False
+        only_stored: bool = True,
+        single_event: bool = False,
+        filter_future_events_sec: Optional[int] = 3600,
     ) -> AsyncGenerator[Event, None]:
         sub_id = secrets.token_hex(4)
         queue = await self.subscribe(sub_id, *filters)
@@ -406,9 +408,15 @@ class Manager:
                 if only_stored:
                     break
             else:
+                # validate event: check signature
                 if not event.verify():
                     self.log.debug(f"event {event.id} failed signature verification")
                     continue
+                # validate event: timestamp should not be in the future
+                if filter_future_events_sec is not None:
+                    if event.created_at > time.time() + filter_future_events_sec:
+                        self.log.debug(f"event {event.id} too far into future")
+                        continue
                 yield event
                 if single_event:
                     break
