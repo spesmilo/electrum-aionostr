@@ -17,8 +17,10 @@ unittests_task:
         - env:
             ELECTRUM_PYTHON_VERSION: 3.13
   install_script:
+    - pip freeze --all  # to log pip/setuptools/wheel/etc versions
     - pip install ".[tests,crypto]"
   version_script:
     - python3 --version
+    - pip freeze --all
   script:
     - pytest tests --cov=electrum_aionostr
