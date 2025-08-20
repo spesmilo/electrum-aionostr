@@ -1,8 +1,7 @@
 import asyncio
 import secrets
-import sys
 import logging
-from json import dumps
+import json
 from collections import defaultdict, namedtuple
 from typing import Optional, Iterable, Dict, List, Set, Any, TYPE_CHECKING, AsyncGenerator
 from dataclasses import dataclass
@@ -43,8 +42,8 @@ class Relay:
         self.ws = None
         self.receive_task = None
         self.subscriptions = defaultdict(lambda: Subscription(filters=[], queue=asyncio.Queue()))
-        self.event_adds = asyncio.Queue()
-        self.notices = asyncio.Queue()
+        self.event_adds = {}  # type: dict[str, asyncio.Future[list]]
+        self.notices = asyncio.Queue(maxsize=100)
         self.private_key = private_key
         self.origin = origin or url
         self.connected = False
@@ -110,7 +109,11 @@ class Relay:
     async def _receive_messages(self):
         while True:
             try:
-                message = await asyncio.wait_for(self.ws.receive_json(), 30.0)
+                message = await self.ws.receive_str()
+                if len(message) > 64000:
+                    self.log.debug(f"got too long message from {self.url=}: {len(message)=}")
+                    continue  # not storing or handling msg > this limit
+                message = json.loads(message)
 
                 self.log.debug(message)  # FIXME spammy (or at least log which relay it's coming from)
                 if message[0] == 'EVENT':
@@ -118,37 +121,48 @@ class Relay:
                 elif message[0] == 'EOSE':
                     await self.subscriptions[message[1]].queue.put(None)
                 elif message[0] == 'OK':
-                    await self.event_adds.put(message)
+                    if message[1] in self.event_adds:
+                        self.event_adds[message[1]].set_result(message)
                 elif message[0] == 'NOTICE':
-                    await self.notices.put(message[1])
+                    if self.notices.full():
+                        self.notices.get_nowait()  # remove the oldest notice to store new one
+                    self.notices.put_nowait(message[1])
                 elif message[0] == 'AUTH':
                     await self.authenticate(message[1])
                 else:
                     self.log.debug(f"Unknown message from relay {self.url}: {str(message)}")
+            except (IndexError, KeyError):
+                await asyncio.sleep(0.1)
+                continue
             except asyncio.CancelledError:
                 return
             except client_exceptions.WSMessageTypeError:  #  raised by receive_json when connection is closed
                 await self.reconnect()
-            except asyncio.TimeoutError:
-                continue
             except Exception as e:
                 self.log.exception("")
                 await asyncio.sleep(5)
 
     async def send(self, message):
         try:
-            await self.ws.send_str(dumps(message))
+            await self.ws.send_str(json.dumps(message))
         except client_exceptions.ClientConnectionError:
             await self.reconnect()
-            await self.ws.send_str(dumps(message))
+            await self.ws.send_str(json.dumps(message))
 
     async def add_event(self, event, check_response=False):
         if isinstance(event, Event):
             event = event.to_json_object()
+        event_id = event['id']
+        if check_response:
+            self.event_adds[event_id] = asyncio.Future()
         await self.send(["EVENT", event])
         if check_response:
-            response = await self.event_adds.get()
+            try:
+                response = await self.event_adds[event_id]
+            finally:
+                del self.event_adds[event_id]
             return response[1]
+        return None
 
     async def subscribe(self, taskgroup, sub_id: str, *filters, queue=None):
         self.subscriptions[sub_id] = Subscription(filters=filters, queue=queue or asyncio.Queue())
