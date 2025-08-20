@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from logging import Logger
     from ssl import SSLContext
     from aiohttp_socks import ProxyConnector
+    from aiohttp import ClientWebSocketResponse
 
 # Subscription used inside Relay
 Subscription = namedtuple('Subscription', ['filters','queue'])
@@ -39,8 +40,8 @@ class Relay:
         self.url = normalize_url(url)
         self.proxy = proxy
         self.client = None  # type: Optional[ClientSession]
-        self.ws = None
-        self.receive_task = None
+        self.ws = None  # type: Optional[ClientWebSocketResponse]
+        self.receive_task = None  # type: Optional[asyncio.Task]
         self.subscriptions = defaultdict(lambda: Subscription(filters=[], queue=asyncio.Queue()))
         self.event_adds = {}  # type: dict[str, asyncio.Future[list]]
         self.notices = asyncio.Queue(maxsize=100)
@@ -136,7 +137,7 @@ class Relay:
                 continue
             except asyncio.CancelledError:
                 return
-            except client_exceptions.WSMessageTypeError:  #  raised by receive_json when connection is closed
+            except client_exceptions.WSMessageTypeError:  #  raised by ws.receive_str when connection is closed
                 await self.reconnect()
             except Exception as e:
                 self.log.exception("")
