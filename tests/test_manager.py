@@ -221,4 +221,52 @@ class TestManager(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(event_task, timeout=1)
         event_task.result()
 
+    async def test_subscription_doesnt_get_closed(self):
+        """
+        Test that a subscription for future events (only_stored=False) doesn't get closed if all
+        relays send EOSE.
+        """
+        private_key = os.urandom(32)
+        with patch('electrum_aionostr.relay.Relay', DummyRelay):
+            manager = Manager(
+                relays=["wss://dummy.relay" for _ in range(10)],
+                private_key=private_key.hex(),
+                log=_logger,
+            )
+        await manager.connect()
+        self.assertTrue(manager.connected)
 
+        any_event = asyncio.Future()
+        async def get_event():
+            query = {'kinds': [1]}
+            async for event in manager.get_events(query, only_stored=False, single_event=False):
+                any_event.set_result(event)
+            self.assertTrue(False, msg="Subscription stopped")
+
+        event_task = asyncio.create_task(get_event())
+        while len(manager.subscriptions) < 1:
+            # wait until task creates subscription
+            await asyncio.sleep(0.01)
+        self.assertEqual(len(manager.subscriptions), 1, msg="manger should have exactly one subscription")
+
+        # all relays send EOSE, but the subscription should stay open
+        subscription_id = next(iter(manager.subscriptions.keys()))
+        eose_message = json.dumps(['EOSE', subscription_id])
+        for dummy_relay in manager.relays:
+            dummy_relay.receive_data_from_relay(eose_message)
+
+        # check that the task is still running and that the subscription didn't return anything
+        await asyncio.sleep(0.1)
+        self.assertFalse(event_task.done(), msg="Subscription task stopped")
+        self.assertFalse(any_event.done())
+
+        # now send one event to a single relay, it should be set in the future
+        relay = manager.relays[0]
+        dummy_event = get_random_dummy_event().to_json_object()
+        event_message = json.dumps(['EVENT', subscription_id, dummy_event])
+        relay.receive_data_from_relay(event_message)
+        await asyncio.wait_for(any_event, timeout=0.5)
+        self.assertEqual(dummy_event, any_event.result().to_json_object())
+        await asyncio.sleep(0.1)
+        self.assertFalse(event_task.done(), msg="The task should still be running")
+        event_task.cancel()
