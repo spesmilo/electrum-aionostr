@@ -210,6 +210,9 @@ class Manager:
     """
     Manage a collection of relays
     """
+    # time after which we assume a relay won't send us any more messages for a requested filter
+    EOSE_TIMEOUT_SEC = 60
+
     def __init__(self,
                  relays: Optional[Iterable[str]] = None,
                  origin: Optional[str] = 'aionostr',
@@ -423,32 +426,49 @@ class Manager:
         only_stored: stops the subscription after the relays have sent all events they currently know
                      of and will not keep waiting for future events.
         """
+        eose_count = 0
         sub_id = secrets.token_hex(4)
         queue = await self.subscribe(sub_id, *filters)
         try:
             while True:
-                event: Optional[Event] = await queue.get()
-                if event is None:
-                    if only_stored:
-                        break
-                else:
-                    # validate event: check signature
-                    if not event.verify():
-                        self.log.debug(f"event {event.id} failed signature verification")
+                if only_stored and eose_count >= len(self.relays):
+                    # We got an EOSE from every relay, so we got all stored events and can end the subscription.
+                    # Note that eose_count might never reach len(self.relays) as some relays might
+                    # aren't even connected
+                    break
+
+                # if only_stored is False we will wait forever on new events as we are also interested
+                # in receiving future events. If only_stored is True we will either wait until we
+                # got an EOSE from each relay or until timeout.
+                event: Optional[Event] = await asyncio.wait_for(
+                    queue.get(),
+                    timeout=self.EOSE_TIMEOUT_SEC if only_stored else None,
+                )
+
+                if event is None:  # None means EOSE message from any connected relay
+                    eose_count += 1
+                    continue
+
+                # validate event: check signature
+                if not event.verify():
+                    self.log.debug(f"event {event.id} failed signature verification")
+                    continue
+                # validate event: timestamp should not be in the future
+                if filter_future_events_sec is not None:
+                    if event.created_at > time.time() + filter_future_events_sec:
+                        self.log.debug(f"event {event.id} too far into future")
                         continue
-                    # validate event: timestamp should not be in the future
-                    if filter_future_events_sec is not None:
-                        if event.created_at > time.time() + filter_future_events_sec:
-                            self.log.debug(f"event {event.id} too far into future")
-                            continue
-                    yield event
-                    if single_event:
-                        break
+                yield event
+                if single_event:
+                    break
+        except asyncio.TimeoutError:
+            self.log.debug(f"received all stored events. {eose_count=}")
         finally:
             # always clean up the subscription when exiting this context.
             # the 'yield' raises GeneratorExit when this generator gets garbage collected after the
             # consumer leaves it. https://peps.python.org/pep-0342/#specification-summary
             await self.unsubscribe(sub_id)
+            self.log.debug(f"subscription {sub_id} closed")
 
 class NotInitialized(Exception):
     pass
