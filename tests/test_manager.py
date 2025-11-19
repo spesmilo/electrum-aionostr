@@ -177,5 +177,48 @@ class TestManager(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(wait_for_cleanup(), timeout=0.5)
         self.assertTrue(event_task.done())
 
+    async def test_subscription_returns_event_stored_only(self):
+        """
+        Test that we don't immediately close the subscription if only_stored=True and any relay returns
+        EOSE (End of stored events) before another relay got the chance to send us the event we requested.
+        """
+        private_key = os.urandom(32)
+        with patch('electrum_aionostr.relay.Relay', DummyRelay):
+            manager = Manager(
+                relays=["wss://dummy.relay" for _ in range(10)],
+                private_key=private_key.hex(),
+                log=_logger,
+            )
+        await manager.connect()
+        self.assertTrue(manager.connected)
+
+        async def get_event():
+            query = {'kinds': [1]}
+            got_event = None
+            async for event in manager.get_events(query, only_stored=True, single_event=False):
+                got_event = event
+            self.assertIsNotNone(got_event, msg="Subscription didn't return any event")
+
+        event_task = asyncio.create_task(get_event())
+        while len(manager.subscriptions) < 1:
+            # wait until task creates subscription
+            await asyncio.sleep(0.01)
+        self.assertEqual(len(manager.subscriptions), 1, msg="manger should have exactly one subscription")
+
+        # all relays except the last one report they don't have any event stored
+        subscription_id = next(iter(manager.subscriptions.keys()))
+        eose_message = json.dumps(['EOSE', subscription_id])
+        for dummy_relay in manager.relays[:-1]:
+            dummy_relay.receive_data_from_relay(eose_message)
+
+        # the last relay will send one event and then EOSE
+        last_relay = manager.relays[-1]
+        event_message = json.dumps(['EVENT', subscription_id, get_random_dummy_event().to_json_object()])
+        last_relay.receive_data_from_relay(event_message)
+        last_relay.receive_data_from_relay(eose_message)
+
+        # the event task should return once it got the event as we set only_stored True
+        await asyncio.wait_for(event_task, timeout=1)
+        event_task.result()
 
 
