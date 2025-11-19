@@ -296,6 +296,7 @@ class Manager:
     async def close(self):
         await self.broadcast(self.relays, 'close', self.taskgroup)
         await self.taskgroup.cancel_remaining()
+        self.connected = False
         if self._proxy:
             await self._proxy.close()
             self._proxy = None
@@ -410,32 +411,44 @@ class Manager:
 
     async def get_events(
         self,
-        *filters,
+        *filters: dict[str, Any],
         only_stored: bool = True,
         single_event: bool = False,
         filter_future_events_sec: Optional[int] = 3600,
     ) -> AsyncGenerator[Event, None]:
+        """
+        Request events matching *filters from our connected relays.
+        *filters: dicts representing the <filtersX> json in NIP-01
+                  https://github.com/nostr-protocol/nips/blob/master/01.md#communication-between-clients-and-relays
+        only_stored: stops the subscription after the relays have sent all events they currently know
+                     of and will not keep waiting for future events.
+        """
         sub_id = secrets.token_hex(4)
         queue = await self.subscribe(sub_id, *filters)
-        while True:
-            event: Optional[Event] = await queue.get()
-            if event is None:
-                if only_stored:
-                    break
-            else:
-                # validate event: check signature
-                if not event.verify():
-                    self.log.debug(f"event {event.id} failed signature verification")
-                    continue
-                # validate event: timestamp should not be in the future
-                if filter_future_events_sec is not None:
-                    if event.created_at > time.time() + filter_future_events_sec:
-                        self.log.debug(f"event {event.id} too far into future")
+        try:
+            while True:
+                event: Optional[Event] = await queue.get()
+                if event is None:
+                    if only_stored:
+                        break
+                else:
+                    # validate event: check signature
+                    if not event.verify():
+                        self.log.debug(f"event {event.id} failed signature verification")
                         continue
-                yield event
-                if single_event:
-                    break
-        await self.unsubscribe(sub_id)
+                    # validate event: timestamp should not be in the future
+                    if filter_future_events_sec is not None:
+                        if event.created_at > time.time() + filter_future_events_sec:
+                            self.log.debug(f"event {event.id} too far into future")
+                            continue
+                    yield event
+                    if single_event:
+                        break
+        finally:
+            # always clean up the subscription when exiting this context.
+            # the 'yield' raises GeneratorExit when this generator gets garbage collected after the
+            # consumer leaves it. https://peps.python.org/pep-0342/#specification-summary
+            await self.unsubscribe(sub_id)
 
 class NotInitialized(Exception):
     pass
