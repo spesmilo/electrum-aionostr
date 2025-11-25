@@ -56,3 +56,25 @@ class TestManager(unittest.IsolatedAsyncioTestCase):
                 event_ids.add(event.id)
 
         monitoring_task.cancel()
+
+    async def test_manager_deduplicates_relays(self):
+        """
+        Relay manager should deduplicate relay urls so it doesn't try to open multiple connections
+        to the same relay if it gets passed slightly different URLS.
+        This is important as we often have to open connections on-demand with urls parsed from Nostr
+        event tags which maybe are slightly different to our own config urls.
+        """
+        relay_urls = [
+            "wss://test.com/",
+            "wss://test.com/",
+            "wss://test.com",
+            "wss://TEST.COM",
+            "wSS://test.com",
+            "wss://TEST.com",
+            "test.com",
+            "TEST.COM",
+        ]
+        manager = Manager(
+            relays=relay_urls,
+        )
+        self.assertEqual(len(manager.relays), 1, msg=[r.url for r in manager.relays])

@@ -232,7 +232,7 @@ class Manager:
             ssl_context=ssl_context,
             proxy=proxy,
             connect_timeout=self._connect_timeout)
-            for r in (relays or [])]
+            for r in set([normalize_url(url) for url in relays] if relays else [])]
         self.subscriptions = {}  # type: Dict[str, ManagerSubscription]
         self._subscription_lock = asyncio.Lock()
         self.connected = False
