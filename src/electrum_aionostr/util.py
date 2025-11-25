@@ -99,4 +99,7 @@ def to_nip19(ntype: str, payload: str, relays=None, author=None, kind=None):
     return bech32.bech32_encode(ntype, converted_bits, bech32.Encoding.BECH32)
 
 def normalize_url(url: str) -> str:
-    return url.strip().rstrip('/')
+    stripped_url = url.strip().rstrip('/').lower()
+    if not stripped_url.startswith(('ws://', 'wss://')):
+        stripped_url = 'wss://' + stripped_url
+    return stripped_url
