@@ -78,3 +78,4 @@ class TestManager(unittest.IsolatedAsyncioTestCase):
             relays=relay_urls,
         )
         self.assertEqual(len(manager.relays), 1, msg=[r.url for r in manager.relays])
+        self.assertEqual(manager.relays[0].url, "wss://test.com")
