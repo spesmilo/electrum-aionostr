@@ -7,14 +7,7 @@ from hashlib import sha256
 
 import electrum_ecc as ecc
 
-# TODO abstract-away crypto backend, as done in electrum/crypto.py
-try:
-    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-    from cryptography.hazmat.backends import default_backend
-    from cryptography.hazmat.primitives import padding
-except ImportError:
-    raise ImportError("Missing dependency 'cryptography'. You could install it using the [crypto] extra.") from None
-
+from .crypto_aes import aes_encrypt_with_iv, aes_decrypt_with_iv
 from .delegation import Delegation
 from .event import Event
 from . import bech32
@@ -77,17 +70,12 @@ class PrivateKey:
         return int.to_bytes(pt.x(), length=32, byteorder='big', signed=False)
 
     def encrypt_message(self, message: str, public_key_hex: str) -> str:
-        padder = padding.PKCS7(128).padder()
-        padded_data = padder.update(message.encode()) + padder.finalize()
-
         iv = secrets.token_bytes(16)
-        cipher = Cipher(
-            algorithms.AES(self.compute_shared_secret(public_key_hex)), modes.CBC(iv), default_backend()
+        encrypted_message = aes_encrypt_with_iv(
+            key=self.compute_shared_secret(public_key_hex),
+            iv=iv,
+            data=message.encode(),
         )
-
-        encryptor = cipher.encryptor()
-        encrypted_message = encryptor.update(padded_data) + encryptor.finalize()
-
         return f"{base64.b64encode(encrypted_message).decode()}?iv={base64.b64encode(iv).decode()}"
 
     def decrypt_message(self, encoded_message: str, public_key_hex: str) -> str:
@@ -95,18 +83,13 @@ class PrivateKey:
         encoded_content, encoded_iv = encoded_data[0], encoded_data[1]
 
         iv = base64.b64decode(encoded_iv)
-        cipher = Cipher(
-            algorithms.AES(self.compute_shared_secret(public_key_hex)), modes.CBC(iv), default_backend()
-        )
         encrypted_content = base64.b64decode(encoded_content)
-
-        decryptor = cipher.decryptor()
-        decrypted_message = decryptor.update(encrypted_content) + decryptor.finalize()
-
-        unpadder = padding.PKCS7(128).unpadder()
-        unpadded_data = unpadder.update(decrypted_message) + unpadder.finalize()
-
-        return unpadded_data.decode()
+        decrypted_message = aes_decrypt_with_iv(
+            key=self.compute_shared_secret(public_key_hex),
+            iv=iv,
+            data=encrypted_content,
+        )
+        return decrypted_message.decode()
 
     def sign_message_hash(self, hash: bytes) -> str:
         sk = ecc.ECPrivkey(self.raw_secret)
