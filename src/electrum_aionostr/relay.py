@@ -29,6 +29,7 @@ class ManagerSubscription:
     filters: tuple[Any, ...]  # filters used to subscribe
     seen_events: Set[bytes]  # event ids we have seen
     monitor: asyncio.Task # monitoring task
+    only_stored: bool
 
 class Relay:
     """
@@ -172,7 +173,7 @@ class Relay:
         return None
 
     async def subscribe(self, taskgroup, sub_id: str, *filters, queue=None):
-        self.subscriptions[sub_id] = Subscription(filters=filters, queue=queue or asyncio.Queue())
+        self.subscriptions[sub_id] = Subscription(filters=filters, queue=queue or asyncio.Queue(maxsize=50))
         await taskgroup.spawn(self.send(["REQ", sub_id, *filters]))
         return self.subscriptions[sub_id].queue
 
@@ -261,7 +262,12 @@ class Manager:
         self.relays.append(Relay(url, **kwargs))
 
     @staticmethod
-    async def monitor_queues(queues, output, seen: Set[bytes]):
+    async def monitor_queues(
+        queues,
+        output: asyncio.Queue[Optional[Event]],
+        seen: Set[bytes],
+        only_stored: bool,
+    ):
         async def func(queue):
             while True:
                 result = await queue.get()
@@ -271,13 +277,23 @@ class Manager:
                         seen.add(eid)
                         await output.put(result)
                 else:
-                    await output.put(None)
+                    if only_stored:  # EOSE message
+                        # put none back on queue in case we update relays during this query, so the
+                        # next monitoring task for this relay will return again here instead of waiting
+                        # for another EOSE
+                        await queue.put(None)
+                        return
 
         tasks = [func(queue) for queue in queues]
         try:
             await asyncio.gather(*tasks)
         except asyncio.CancelledError:
+            # don't shut down the output queue, we just want to update the relays
             return
+
+        # if all tasks naturally returned (not cancelled) we got an EOSE of each relay (only_stored).
+        await output.put(None)
+        assert only_stored
 
     async def broadcast(self, relays, func, *args, **kwargs):
         """ returns when all tasks completed. timeout is enforced """
@@ -333,7 +349,7 @@ class Manager:
         result = await asyncio.wait_for(queue.get(), timeout=self._connect_timeout)
         return result
 
-    async def subscribe(self, sub_id: str, *filters) -> asyncio.Queue[Optional[Event]]:
+    async def subscribe(self, sub_id: str, only_stored: bool, *filters) -> asyncio.Queue[Optional[Event]]:
         """Apply the given filter to all relays and return a queue that collects incoming events"""
         relay_queues = []
         async with self._subscription_lock:
@@ -347,10 +363,19 @@ class Manager:
                 output_queue = asyncio.Queue()
                 seen_events = set()
                 subscription = ManagerSubscription(
-                    monitor=await self.taskgroup.spawn(self.monitor_queues(relay_queues, output_queue, seen_events)),
+                    monitor=await self.taskgroup.spawn(
+                        self.monitor_queues(
+                            relay_queues,
+                            output_queue,
+                            seen_events,
+                            only_stored,
+                        )
+                    ),
                     filters=filters,
                     output_queue=output_queue,
-                    seen_events=seen_events)
+                    seen_events=seen_events,
+                    only_stored=only_stored,
+                )
                 self.subscriptions[sub_id] = subscription
             else:  # update existing subscription
                 subscription = self.subscriptions[sub_id]
@@ -360,7 +385,9 @@ class Manager:
                     self.monitor_queues(
                         relay_queues,
                         output_queue,
-                        subscription.seen_events)
+                        subscription.seen_events,
+                        subscription.only_stored,
+                    )
                 )
         return output_queue
 
@@ -415,7 +442,7 @@ class Manager:
         # refresh subscriptions
         if changes:
             for sub_id, subscription in self.subscriptions.items():
-                await self.subscribe(sub_id, *subscription.filters)
+                await self.subscribe(sub_id, subscription.only_stored, *subscription.filters)
 
     async def __aenter__(self):
         await self.taskgroup.__aenter__()
@@ -440,28 +467,20 @@ class Manager:
         only_stored: stops the subscription after the relays have sent all events they currently know
                      of and will not keep waiting for future events.
         """
-        eose_count = 0
         sub_id = secrets.token_hex(4)
-        queue = await self.subscribe(sub_id, *filters)
+        queue = await self.subscribe(sub_id, only_stored, *filters)
         try:
             while True:
-                if only_stored and eose_count >= len(self.relays):
-                    # We got an EOSE from every relay, so we got all stored events and can end the subscription.
-                    # Note that eose_count might never reach len(self.relays) as some relays might
-                    # aren't even connected
-                    break
-
                 # if only_stored is False we will wait forever on new events as we are also interested
                 # in receiving future events. If only_stored is True we will either wait until we
-                # got an EOSE from each relay or until timeout.
+                # got an EOSE from each relay (None) or until timeout.
                 event: Optional[Event] = await asyncio.wait_for(
                     queue.get(),
                     timeout=self.EOSE_TIMEOUT_SEC if only_stored else None,
                 )
-
-                if event is None:  # None means EOSE message from any connected relay
-                    eose_count += 1
-                    continue
+                if event is None:
+                    self.log.debug(f"received all stored events (EOSE).")
+                    return
 
                 # validate event: check signature
                 if not event.verify():
@@ -476,7 +495,7 @@ class Manager:
                 if single_event:
                     break
         except asyncio.TimeoutError:
-            self.log.debug(f"received all stored events. {eose_count=}")
+            self.log.debug(f"received all stored events (timeout).")
         finally:
             # always clean up the subscription when exiting this context.
             # the 'yield' raises GeneratorExit when this generator gets garbage collected after the
