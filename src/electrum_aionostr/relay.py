@@ -69,6 +69,12 @@ class Relay:
                 if self.ws:
                     await self.ws.close()
                 await asyncio.sleep(i ** 2)
+            except asyncio.CancelledError:
+                # the Manager might cancel the connection attempt if it takes too long, we still
+                # need to clean up the client
+                await self.client.close()
+                self.client = None
+                raise
             else:
                 break
         else:
@@ -280,7 +286,15 @@ class Manager:
         if not results:
             return
         self.log.debug("Waiting for %s", func)
-        return await asyncio.wait(results, return_when=asyncio.ALL_COMPLETED)
+        done, pending = await asyncio.wait(results, return_when=asyncio.ALL_COMPLETED)
+        for task in done:
+            try:
+                task.result()
+            except asyncio.TimeoutError:
+                pass
+            except Exception:
+                self.log.exception("Exception in broadcast task")
+        return done, pending
 
     async def connect(self):
         async with self._connectlock:
