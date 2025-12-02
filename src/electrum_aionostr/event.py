@@ -45,33 +45,40 @@ class Event:
 
     def __init__(
         self,
+        *,
         pubkey: str = "",
         content: str = "",
         created_at: int = 0,
         kind: int = EventKind.TEXT_NOTE,
-        tags: "list[list[str]]" = None,
-        id: str = None,
-        sig: str = None,
+        tags: list[list[str]] = None,
+        sig: str = None,  # note: NOT verified. caller must explicitly call .verify(). FIXME verify here?
         expiration_ts: Optional[int] = None,
     ) -> None:
         if not isinstance(content, str):
             raise TypeError("Argument 'content' must be of type str")
-        assert len(pubkey) == 64, f"got pubkey with unexpected len={len(pubkey)}, expected 64 char x-only hex"
+        self.content = content
+        if not (isinstance(pubkey, str) and len(pubkey) == 64):
+            raise TypeError(f"got pubkey with unexpected type or len={len(pubkey)}, expected 64 char x-only hex")
+        self.pubkey = pubkey
         if tags is None:
             tags = []
-        self.pubkey = pubkey
-        self.content = content
-        self.created_at = created_at or int(time.time())
-        self.kind = int(kind)
+        for inner_list in tags:
+            if not all(isinstance(x, str) for x in inner_list):
+                raise TypeError(f"tags must be list[list[str]]: {tags=!r}")
         self.tags = tags
+        self.created_at = int(created_at) or int(time.time())
+        kind = int(kind)
+        if not (0 <= kind <= 65535):
+            raise ValueError(f"event.kind out of range: {kind}")
+        self.kind = kind
+        if not (sig is None or isinstance(sig, str) and len(sig) == 128):
+            raise TypeError(f"got sig with unexpected type or len={len(sig)}, expected 64 char hex")
         self.sig = sig
         if expiration_ts is not None:
             self.add_expiration_tag(expiration_ts)
-        if not id:
-            id = Event.compute_id(
-                self.pubkey, self.created_at, self.kind, self.tags, self.content
-            )
-        self.id = id
+        self.id = Event.compute_id(
+            self.pubkey, self.created_at, self.kind, self.tags, self.content
+        )
 
     @property
     def id_bytes(self):
@@ -147,6 +154,7 @@ class Event:
         event_id = Event.compute_id(
             self.pubkey, self.created_at, self.kind, self.tags, self.content
         )
+        assert self.id == event_id
 
         verified = pub_key.schnorr_verify(
             bytes.fromhex(self.sig),
@@ -200,3 +208,14 @@ class Event:
             "content": self.content,
             "sig": self.sig,
         }
+
+    @classmethod
+    def from_json(cls, d: dict) -> "Event":
+        return Event(
+            pubkey=d["pubkey"],
+            created_at=d["created_at"],
+            kind=d["kind"],
+            tags=d["tags"],
+            content=d["content"],
+            sig=d["sig"],
+        )

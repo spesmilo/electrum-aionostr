@@ -125,7 +125,7 @@ class Relay:
 
                 self.log.debug(message)  # FIXME spammy (or at least log which relay it's coming from)
                 if message[0] == 'EVENT':
-                    await self.subscriptions[message[1]].queue.put(Event(**message[2]))
+                    await self.subscriptions[message[1]].queue.put(Event.from_json(message[2]))
                 elif message[0] == 'EOSE':
                     await self.subscriptions[message[1]].queue.put(None)
                 elif message[0] == 'OK':
