@@ -32,6 +32,10 @@ class EventKind(IntEnum):
     DELETE = 5
 
 
+class InvalidEvent(ValueError):
+    pass
+
+
 class Event:
     __slots__ = (
         "id",
@@ -51,7 +55,7 @@ class Event:
         created_at: int = 0,
         kind: int = EventKind.TEXT_NOTE,
         tags: list[list[str]] = None,
-        sig: str = None,  # note: NOT verified. caller must explicitly call .verify(). FIXME verify here?
+        sig: str = None,
         expiration_ts: Optional[int] = None,
     ) -> None:
         if not isinstance(content, str):
@@ -71,14 +75,17 @@ class Event:
         if not (0 <= kind <= 65535):
             raise ValueError(f"event.kind out of range: {kind}")
         self.kind = kind
-        if not (sig is None or isinstance(sig, str) and len(sig) == 128):
-            raise TypeError(f"got sig with unexpected type or len={len(sig)}, expected 64 char hex")
-        self.sig = sig
         if expiration_ts is not None:
             self.add_expiration_tag(expiration_ts)
         self.id = Event.compute_id(
             self.pubkey, self.created_at, self.kind, self.tags, self.content
         )
+        if not (sig is None or isinstance(sig, str) and len(sig) == 128):
+            raise TypeError(f"got sig with unexpected type or len={len(sig)}, expected 128 char hex")
+        self.sig = sig
+        if self.sig:
+            if not self.verify():
+                raise InvalidEvent("invalid signature")
 
     @property
     def id_bytes(self):
@@ -210,12 +217,17 @@ class Event:
         }
 
     @classmethod
-    def from_json(cls, d: dict) -> "Event":
+    def from_json(cls, d: dict, *, verify_sig: bool = True) -> "Event":
+        sig = None
+        if verify_sig:  # we just check we were given a sig, the sigcheck itself is in Event.__init__
+            sig = d.get("sig")
+            if not sig:
+                raise ValueError("missing sig")
         return Event(
             pubkey=d["pubkey"],
             created_at=d["created_at"],
             kind=d["kind"],
             tags=d["tags"],
             content=d["content"],
-            sig=d["sig"],
+            sig=sig,
         )
