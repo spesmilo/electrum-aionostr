@@ -46,7 +46,7 @@ class Relay:
         self.client = None  # type: Optional[ClientSession]
         self.ws = None  # type: Optional[ClientWebSocketResponse]
         self.receive_task = None  # type: Optional[asyncio.Task]
-        self.subscriptions = defaultdict(lambda: Subscription(filters=[], queue=asyncio.Queue()))
+        self.subscriptions = {}  # type: Dict[str, Subscription]
         self.event_adds = {}  # type: dict[str, asyncio.Future[list]]
         self.notices = asyncio.Queue(maxsize=100)
         self.private_key = private_key
@@ -130,9 +130,13 @@ class Relay:
 
                 self.log.debug(message)  # FIXME spammy (or at least log which relay it's coming from)
                 if message[0] == 'EVENT':
-                    await self.subscriptions[message[1]].queue.put(Event.from_json(message[2]))
+                    sub_id = message[1]
+                    sub = self.subscriptions[sub_id]  # can raise KeyError for unknown sub_id
+                    await sub.queue.put(Event.from_json(message[2]))
                 elif message[0] == 'EOSE':
-                    await self.subscriptions[message[1]].queue.put(None)
+                    sub_id = message[1]
+                    sub = self.subscriptions[sub_id]  # can raise KeyError for unknown sub_id
+                    await sub.queue.put(None)
                 elif message[0] == 'OK':
                     if message[1] in self.event_adds:
                         self.event_adds[message[1]].set_result(message)
@@ -182,9 +186,9 @@ class Relay:
         await taskgroup.spawn(self.send(["REQ", sub_id, *filters]))
         return self.subscriptions[sub_id].queue
 
-    async def unsubscribe(self, sub_id):
+    async def unsubscribe(self, sub_id: str) -> None:
         await self.send(["CLOSE", sub_id])
-        del self.subscriptions[sub_id]
+        self.subscriptions.pop(sub_id, None)
 
     async def authenticate(self, challenge:str):
         if not self.private_key:
@@ -364,7 +368,7 @@ class Manager:
                 else:  # relay is already subscribed to this sub_id
                     relay_queues.append(relay.subscriptions[sub_id].queue)
 
-            if not sub_id in self.subscriptions:  # create new output queue
+            if sub_id not in self.subscriptions:  # create new output queue
                 output_queue = asyncio.Queue()
                 seen_events = set()
                 subscription = ManagerSubscription(
@@ -396,11 +400,12 @@ class Manager:
                 )
         return output_queue
 
-    async def unsubscribe(self, sub_id):
+    async def unsubscribe(self, sub_id: str):
         async with self._subscription_lock:
             await self.broadcast(self.relays, 'unsubscribe', sub_id)
-            self.subscriptions[sub_id].monitor.cancel()
-            del self.subscriptions[sub_id]
+            if sub_id in self.subscriptions:
+                self.subscriptions[sub_id].monitor.cancel()
+                self.subscriptions.pop(sub_id, None)
 
     async def update_relays(self, updated_relay_list: Iterable[str]) -> None:
         """Dynamically update the relays of an existing Manager instance"""
