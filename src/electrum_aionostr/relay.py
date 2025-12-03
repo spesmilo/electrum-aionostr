@@ -35,6 +35,9 @@ class Relay:
     """
     Interact with a relay
     """
+
+    DELAY_INC_MSG_PROCESSING_SLEEP = 0.005  # in seconds
+
     def __init__(self, url: str, origin:str = '', private_key:str='', connect_timeout: float=1.0, log=None, ssl_context=None,
                  proxy: Optional['ProxyConnector']=None):
         self.log = log or logging.getLogger(__name__)
@@ -116,6 +119,8 @@ class Relay:
 
     async def _receive_messages(self):
         while True:
+            # sleep a bit between each message, to mitigate CPU-DOS (verifying signatures is expensive):
+            await asyncio.sleep(self.DELAY_INC_MSG_PROCESSING_SLEEP)
             try:
                 message = await self.ws.receive_str()
                 if len(message) > 64000:
