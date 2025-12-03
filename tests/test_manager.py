@@ -90,7 +90,7 @@ class TestManager(unittest.IsolatedAsyncioTestCase):
         for queue in input_queues:
             for dummy_event in dummy_events:
                 queue.put_nowait(dummy_event)
-            queue.put_nowait(None)
+            queue.put_nowait(None)  # EOSE
 
         # Create a patched version of Queue.put that adds a delay to force context
         # switching as it happens with regular usage of monitor_queues
@@ -104,12 +104,14 @@ class TestManager(unittest.IsolatedAsyncioTestCase):
                 input_queues,
                 output_queue,
                 set(),
+                True,
             ))
             # check if the output queue returns some events twice
             event_ids = set()
             while True:
                 event = await asyncio.wait_for(output_queue.get(), timeout=10)
                 if event is None:
+                    assert len(event_ids) == len(dummy_events)
                     break
                 assert event.id not in event_ids
                 event_ids.add(event.id)
@@ -144,7 +146,7 @@ class TestManager(unittest.IsolatedAsyncioTestCase):
         private_key = os.urandom(32)
         with patch('electrum_aionostr.relay.Relay', DummyRelay):
             manager = Manager(
-                relays=["wss://dummy.relay" for _ in range(10)],
+                relays=[f"wss://dummy{i}.relay" for i in range(10)],
                 private_key=private_key.hex(),
                 log=_logger,
             )
@@ -185,7 +187,7 @@ class TestManager(unittest.IsolatedAsyncioTestCase):
         private_key = os.urandom(32)
         with patch('electrum_aionostr.relay.Relay', DummyRelay):
             manager = Manager(
-                relays=["wss://dummy.relay" for _ in range(10)],
+                relays=[f"wss://dummy{i}.relay" for i in range(10)],
                 private_key=private_key.hex(),
                 log=_logger,
             )
@@ -211,6 +213,10 @@ class TestManager(unittest.IsolatedAsyncioTestCase):
         for dummy_relay in manager.relays[:-1]:
             dummy_relay.receive_data_from_relay(eose_message)
 
+        # the first relay even sends multiple EOSE to us
+        for _ in range(10):
+            manager.relays[0].receive_data_from_relay(eose_message)
+
         # the last relay will send one event and then EOSE
         last_relay = manager.relays[-1]
         event_message = json.dumps(['EVENT', subscription_id, get_random_dummy_event().to_json_object()])
@@ -229,7 +235,7 @@ class TestManager(unittest.IsolatedAsyncioTestCase):
         private_key = os.urandom(32)
         with patch('electrum_aionostr.relay.Relay', DummyRelay):
             manager = Manager(
-                relays=["wss://dummy.relay" for _ in range(10)],
+                relays=[f"wss://dummy{i}.relay" for i in range(10)],
                 private_key=private_key.hex(),
                 log=_logger,
             )
