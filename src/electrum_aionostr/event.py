@@ -1,6 +1,8 @@
 """
 forked from https://github.com/jeffthibault/python-nostr.git
 """
+import copy
+import dataclasses
 import time
 import functools
 from enum import IntEnum
@@ -36,54 +38,45 @@ class InvalidEvent(ValueError):
     pass
 
 
+@dataclasses.dataclass(frozen=True, kw_only=True, slots=True)
 class Event:
-    __slots__ = (
-        "id",
-        "pubkey",
-        "created_at",
-        "kind",
-        "content",
-        "tags",
-        "sig",
-    )
+    id: Optional[str] = None
+    pubkey: str
+    content: str = ""
+    created_at: int = dataclasses.field(default_factory=lambda: int(time.time()))
+    kind: int = EventKind.TEXT_NOTE
+    tags: list[list[str]] = dataclasses.field(default_factory=list)  # supposed to be immutable!
+    sig: Optional[str] = None
 
-    def __init__(
-        self,
-        *,
-        pubkey: str = "",
-        content: str = "",
-        created_at: int = 0,
-        kind: int = EventKind.TEXT_NOTE,
-        tags: list[list[str]] = None,
-        sig: str = None,
-        expiration_ts: Optional[int] = None,
-    ) -> None:
-        if not isinstance(content, str):
-            raise TypeError("Argument 'content' must be of type str")
-        self.content = content
-        if not (isinstance(pubkey, str) and len(pubkey) == 64):
-            raise TypeError(f"got pubkey with unexpected type or len={len(pubkey)}, expected 64 char x-only hex")
-        self.pubkey = pubkey
-        if tags is None:
-            tags = []
-        for inner_list in tags:
+    def __post_init__(self):
+        if not isinstance(self.content, str):
+            raise TypeError("'content' must be a str")
+        if not (isinstance(self.pubkey, str) and len(self.pubkey) == 64):
+            raise TypeError(f"got pubkey with unexpected type or len={len(self.pubkey)}, expected 64 char x-only hex")
+        for inner_list in self.tags:
             if not all(isinstance(x, str) for x in inner_list):
-                raise TypeError(f"tags must be list[list[str]]: {tags=!r}")
-        self.tags = tags
-        self.created_at = int(created_at) or int(time.time())
-        kind = int(kind)
-        if not (0 <= kind <= 65535):
-            raise ValueError(f"event.kind out of range: {kind}")
-        self.kind = kind
-        if expiration_ts is not None:
-            self.add_expiration_tag(expiration_ts)
-        self.id = Event.compute_id(
-            self.pubkey, self.created_at, self.kind, self.tags, self.content
+                raise TypeError(f"tags must be list[list[str]]: {self.tags=!r}")
+        if not isinstance(self.created_at, int):
+            raise TypeError("'created_at' must be an int")
+        if not isinstance(self.kind, int):
+            raise TypeError("Argument 'kind' must be an int")
+        if not (0 <= self.kind <= 65535):
+            raise ValueError(f"event.kind out of range: {self.kind}")
+        # id
+        # note: we don't validate the original self.id, just always overwrite it
+        computed_id = self.compute_id(
+            pubkey=self.pubkey,
+            created_at=self.created_at,
+            kind=self.kind,
+            tags=self.tags,
+            content=self.content,
         )
-        if not (sig is None or isinstance(sig, str) and len(sig) == 128):
-            raise TypeError(f"got sig with unexpected type or len={len(sig)}, expected 128 char hex")
-        self.sig = sig
-        if self.sig:
+        object.__setattr__(self, 'id', computed_id)
+        # sigcheck.
+        # We enforce sig is either None or a valid signature.
+        if self.sig is not None:
+            if not (isinstance(self.sig, str) and len(self.sig) == 128):
+                raise TypeError(f"got sig with unexpected type or len={len(self.sig)}, expected 128 char hex")
             if not self.verify():
                 raise InvalidEvent("invalid signature")
 
@@ -93,38 +86,40 @@ class Event:
 
     @property
     def is_ephemeral(self):
-        return self.kind >= 20000 and self.kind < 30000
+        return 20000 <= self.kind < 30000
 
     @property
     def is_replaceable(self):
-        return self.kind >= 10000 and self.kind < 20000
+        return 10000 <= self.kind < 20000
 
     @property
-    def is_paramaterized_replaceable(self):
-        return self.kind >= 30000 and self.kind < 40000
+    def is_parameterized_replaceable(self):
+        return 30000 <= self.kind < 40000
 
     @staticmethod
     def serialize(
-        public_key: str,
+        *,
+        pubkey: str,
         created_at: int,
         kind: int,
         tags: "list[list[str]]",
         content: str,
     ) -> bytes:
-        data = [0, public_key, created_at, kind, tags, content]
+        data = [0, pubkey, created_at, kind, tags, content]
         data_str = dumps(data)
         return data_str.encode()
 
     @staticmethod
     def compute_id(
-        public_key: str,
+        *,
+        pubkey: str,
         created_at: int,
         kind: int,
         tags: "list[list[str]]",
         content: str,
     ) -> str:
         return sha256(
-            Event.serialize(public_key, created_at, kind, tags, content)
+            Event.serialize(pubkey=pubkey, created_at=created_at, kind=kind, tags=tags, content=content)
         ).hexdigest()
 
     def expires_at(self) -> Optional[int]:
@@ -141,15 +136,22 @@ class Event:
             return expiration_ts < time.time()
         return False
 
-    def add_expiration_tag(self, expiration_ts: int):
+    def add_expiration_tag(self, expiration_ts: int) -> "Event":
         assert self.expires_at() is None, "Duplicate expiration tags"
         assert expiration_ts >= int(time.time()), f"Expiration is in the past: {expiration_ts=}"
-        self.tags.append(['expiration', str(expiration_ts)])
+        tags = copy.deepcopy(self.tags)
+        tags.append(['expiration', str(expiration_ts)])
+        return dataclasses.replace(self, tags=tags, sig=None)
 
-    def sign(self, private_key_hex: str) -> None:
+    def sign(self, private_key_hex: str) -> "Event":
+        sig = self._sign_event_id(private_key_hex=private_key_hex, event_id=self.id)
+        return dataclasses.replace(self, sig=sig)
+
+    @classmethod
+    def _sign_event_id(cls, *, private_key_hex: str, event_id: str) -> str:
         sk = ECPrivkey(bytes.fromhex(private_key_hex))
-        sig = sk.schnorr_sign(bytes.fromhex(self.id))
-        self.sig = sig.hex()
+        sig = sk.schnorr_sign(bytes.fromhex(event_id))
+        return sig.hex()
 
     def verify(self) -> bool:
         if not self.sig:
@@ -159,7 +161,7 @@ class Event:
         except Exception as e:
             return False
         event_id = Event.compute_id(
-            self.pubkey, self.created_at, self.kind, self.tags, self.content
+            pubkey=self.pubkey, created_at=self.created_at, kind=self.kind, tags=self.tags, content=self.content,
         )
         assert self.id == event_id
 
@@ -182,7 +184,7 @@ class Event:
                     return False
         return verified
 
-    def has_tag(self, tag_name: str, matches: list = None) -> (bool, str):
+    def has_tag(self, tag_name: str, matches: list = None) -> tuple[bool, str]:
         """
         Given a tag name and optional list of matches to find, return (found, match)
         """

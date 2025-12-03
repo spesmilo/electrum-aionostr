@@ -107,7 +107,7 @@ async def _add_event(manager, event:dict=None, private_key='', kind=1, pubkey=''
             kind = 4
             content = prikey.encrypt_message(content, dm_pubkey)
         event = Event(pubkey=pubkey, content=content, created_at=created_at, tags=tags, kind=kind)
-        event.sign(prikey.hex())
+        event = event.sign(prikey.hex())
         event_id = event.id
     else:
         event_id = event['id']

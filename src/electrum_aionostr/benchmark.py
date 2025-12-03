@@ -49,7 +49,7 @@ def make_events(num_events):
     tags = [["t", "benchmark"], ["expiration", expiration]]
     for i in range(num_events):
         e = Event(kind=9999, content=secrets.token_hex(6), pubkey=pubkey, tags=tags)
-        e.sign(prikey)
+        e = e.sign(prikey)
         events.append(e)
     return events
 

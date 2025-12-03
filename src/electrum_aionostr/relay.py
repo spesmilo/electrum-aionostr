@@ -209,7 +209,7 @@ class Relay:
                 ['relay', self.url]
             ]
         )
-        auth_event.sign(pk.hex())
+        auth_event = auth_event.sign(pk.hex())
         await self.send(["AUTH", auth_event.to_json_object()])
         await asyncio.sleep(0.1)
         return True
@@ -492,10 +492,8 @@ class Manager:
                     self.log.debug(f"received all stored events (EOSE).")
                     return
 
-                # validate event: check signature
-                if not event.verify():
-                    self.log.debug(f"event {event.id} failed signature verification")
-                    continue
+                # validate event: sigcheck already done in Event.__init__
+                assert event.sig is not None
                 # validate event: timestamp should not be in the future
                 if filter_future_events_sec is not None:
                     if event.created_at > time.time() + filter_future_events_sec:
