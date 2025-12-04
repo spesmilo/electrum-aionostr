@@ -132,7 +132,13 @@ class Relay:
                 if message[0] == 'EVENT':
                     sub_id = message[1]
                     sub = self.subscriptions[sub_id]  # can raise KeyError for unknown sub_id
-                    await sub.queue.put(Event.from_json(message[2]))
+                    # note: - Event.from_json will do basic validation, and sigcheck.
+                    #       - The sigcheck is expensive -- we could perhaps pre-calc the event_id,
+                    #         store a per-relay per-sub "seen" event_id set, and discard duplicates.
+                    #         To make it harder for malicious relay to CPU-DOS us.
+                    event = Event.from_json(message[2])
+                    # TODO validate if event is actually related to sub? by matching sub.filters
+                    await sub.queue.put(event)
                 elif message[0] == 'EOSE':
                     sub_id = message[1]
                     sub = self.subscriptions[sub_id]  # can raise KeyError for unknown sub_id
