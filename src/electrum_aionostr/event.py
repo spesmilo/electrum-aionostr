@@ -90,7 +90,7 @@ class Event:
 
     @property
     def is_replaceable(self):
-        return 10000 <= self.kind < 20000
+        return (10000 <= self.kind < 20000) or self.kind in (0, 3,)
 
     @property
     def is_parameterized_replaceable(self):
