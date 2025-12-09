@@ -35,6 +35,9 @@ class Relay:
     """
     Interact with a relay
     """
+
+    DELAY_INC_MSG_PROCESSING_SLEEP = 0.005  # in seconds
+
     def __init__(self, url: str, origin:str = '', private_key:str='', connect_timeout: float=1.0, log=None, ssl_context=None,
                  proxy: Optional['ProxyConnector']=None):
         self.log = log or logging.getLogger(__name__)
@@ -43,7 +46,7 @@ class Relay:
         self.client = None  # type: Optional[ClientSession]
         self.ws = None  # type: Optional[ClientWebSocketResponse]
         self.receive_task = None  # type: Optional[asyncio.Task]
-        self.subscriptions = defaultdict(lambda: Subscription(filters=[], queue=asyncio.Queue()))
+        self.subscriptions = {}  # type: Dict[str, Subscription]
         self.event_adds = {}  # type: dict[str, asyncio.Future[list]]
         self.notices = asyncio.Queue(maxsize=100)
         self.private_key = private_key
@@ -116,6 +119,8 @@ class Relay:
 
     async def _receive_messages(self):
         while True:
+            # sleep a bit between each message, to mitigate CPU-DOS (verifying signatures is expensive):
+            await asyncio.sleep(self.DELAY_INC_MSG_PROCESSING_SLEEP)
             try:
                 message = await self.ws.receive_str()
                 if len(message) > 64000:
@@ -125,9 +130,19 @@ class Relay:
 
                 self.log.debug(message)  # FIXME spammy (or at least log which relay it's coming from)
                 if message[0] == 'EVENT':
-                    await self.subscriptions[message[1]].queue.put(Event(**message[2]))
+                    sub_id = message[1]
+                    sub = self.subscriptions[sub_id]  # can raise KeyError for unknown sub_id
+                    # note: - Event.from_json will do basic validation, and sigcheck.
+                    #       - The sigcheck is expensive -- we could perhaps pre-calc the event_id,
+                    #         store a per-relay per-sub "seen" event_id set, and discard duplicates.
+                    #         To make it harder for malicious relay to CPU-DOS us.
+                    event = Event.from_json(message[2])
+                    # TODO validate if event is actually related to sub? by matching sub.filters
+                    await sub.queue.put(event)
                 elif message[0] == 'EOSE':
-                    await self.subscriptions[message[1]].queue.put(None)
+                    sub_id = message[1]
+                    sub = self.subscriptions[sub_id]  # can raise KeyError for unknown sub_id
+                    await sub.queue.put(None)
                 elif message[0] == 'OK':
                     if message[1] in self.event_adds:
                         self.event_adds[message[1]].set_result(message)
@@ -177,9 +192,9 @@ class Relay:
         await taskgroup.spawn(self.send(["REQ", sub_id, *filters]))
         return self.subscriptions[sub_id].queue
 
-    async def unsubscribe(self, sub_id):
+    async def unsubscribe(self, sub_id: str) -> None:
         await self.send(["CLOSE", sub_id])
-        del self.subscriptions[sub_id]
+        self.subscriptions.pop(sub_id, None)
 
     async def authenticate(self, challenge:str):
         if not self.private_key:
@@ -200,7 +215,7 @@ class Relay:
                 ['relay', self.url]
             ]
         )
-        auth_event.sign(pk.hex())
+        auth_event = auth_event.sign(pk.hex())
         await self.send(["AUTH", auth_event.to_json_object()])
         await asyncio.sleep(0.1)
         return True
@@ -359,7 +374,7 @@ class Manager:
                 else:  # relay is already subscribed to this sub_id
                     relay_queues.append(relay.subscriptions[sub_id].queue)
 
-            if not sub_id in self.subscriptions:  # create new output queue
+            if sub_id not in self.subscriptions:  # create new output queue
                 output_queue = asyncio.Queue()
                 seen_events = set()
                 subscription = ManagerSubscription(
@@ -391,11 +406,12 @@ class Manager:
                 )
         return output_queue
 
-    async def unsubscribe(self, sub_id):
+    async def unsubscribe(self, sub_id: str):
         async with self._subscription_lock:
             await self.broadcast(self.relays, 'unsubscribe', sub_id)
-            self.subscriptions[sub_id].monitor.cancel()
-            del self.subscriptions[sub_id]
+            if sub_id in self.subscriptions:
+                self.subscriptions[sub_id].monitor.cancel()
+                self.subscriptions.pop(sub_id, None)
 
     async def update_relays(self, updated_relay_list: Iterable[str]) -> None:
         """Dynamically update the relays of an existing Manager instance"""
@@ -482,10 +498,8 @@ class Manager:
                     self.log.debug(f"received all stored events (EOSE).")
                     return
 
-                # validate event: check signature
-                if not event.verify():
-                    self.log.debug(f"event {event.id} failed signature verification")
-                    continue
+                # validate event: sigcheck already done in Event.__init__
+                assert event.sig is not None
                 # validate event: timestamp should not be in the future
                 if filter_future_events_sec is not None:
                     if event.created_at > time.time() + filter_future_events_sec:

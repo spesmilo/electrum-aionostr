@@ -20,7 +20,7 @@ def get_random_dummy_event() -> Event:
         pubkey=privkey.public_key.hex(),
         content="test"
     )
-    event.sign(privkey.hex())
+    event = event.sign(privkey.hex())
     return event
 
 
