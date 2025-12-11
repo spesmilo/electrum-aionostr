@@ -1,7 +1,7 @@
 """Top-level package for aionostr."""
 
 __author__ = """The Electrum Developers"""
-__version__ = '0.0.11'
+__version__ = '0.1.0'
 
 import time
 from typing import Optional, List, Any
