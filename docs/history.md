@@ -1,5 +1,17 @@
 # Release History / Changelog
 
+* **Release v0.1.0 (2025-12-11)**
+
+    - Event class: minor API changes, most importantly Event is now immutable (#21)
+    - add some mitigations against misbehaving/malicious relays and related bug fixes
+      - fix some memory exhaustion attacks (#15, cfe4b79e)
+      - don't let one relay miss us events from other relays (#16, #20, dbf0b7f1)
+      - Relay._receive_messages: sleep a bit between each message (38b6f2d6)
+    - (fix) manager: more robust clean-up on timeouts (#19)
+    - dependencies: instead of requiring `cryptography`, allow choice
+      between `pycryptodomex` and `cryptography` (#18)
+
+
 * **Release v0.0.11 (2025-06-10)**
 
     - fix tests for Click>=8.2
