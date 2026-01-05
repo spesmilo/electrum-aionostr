@@ -96,9 +96,6 @@ class PrivateKey:
         sig = sk.schnorr_sign(hash)
         return sig.hex()
 
-    def sign_event(self, event: Event) -> None:
-        event.sig = self.sign_message_hash(bytes.fromhex(event.id))
-
     def sign_delegation(self, delegation: Delegation) -> None:
         delegation.signature = self.sign_message_hash(
             sha256(delegation.delegation_token.encode()).digest()
