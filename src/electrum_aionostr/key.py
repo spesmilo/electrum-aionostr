@@ -7,10 +7,15 @@ from hashlib import sha256
 
 import electrum_ecc as ecc
 
-from .crypto_aes import aes_encrypt_with_iv, aes_decrypt_with_iv
 from .delegation import Delegation
-from .event import Event
 from . import bech32
+
+AES_AVAILABLE = False
+try:
+    from .crypto_aes import aes_encrypt_with_iv, aes_decrypt_with_iv
+    AES_AVAILABLE = True
+except ImportError:
+    pass
 
 
 class PublicKey:
@@ -70,6 +75,8 @@ class PrivateKey:
         return int.to_bytes(pt.x(), length=32, byteorder='big', signed=False)
 
     def encrypt_message(self, message: str, public_key_hex: str) -> str:
+        if not AES_AVAILABLE:
+            raise CryptoBackendUnavailableError
         iv = secrets.token_bytes(16)
         encrypted_message = aes_encrypt_with_iv(
             key=self.compute_shared_secret(public_key_hex),
@@ -79,6 +86,8 @@ class PrivateKey:
         return f"{base64.b64encode(encrypted_message).decode()}?iv={base64.b64encode(iv).decode()}"
 
     def decrypt_message(self, encoded_message: str, public_key_hex: str) -> str:
+        if not AES_AVAILABLE:
+            raise CryptoBackendUnavailableError
         encoded_data = encoded_message.split("?iv=")
         encoded_content, encoded_iv = encoded_data[0], encoded_data[1]
 
@@ -121,3 +130,11 @@ def mine_vanity_key(prefix: str = None, suffix: str = None) -> PrivateKey:
         break
 
     return sk
+
+
+class CryptoBackendUnavailableError(ImportError):
+    def __init__(self):
+        super().__init__(
+            "Error: at least one of ('pycryptodomex', 'cryptography') needs to be installed for NIP-04 functionality.\n"
+            "Install electrum-aionostr with with [crypto] feature: `pip install electrum-aionostr[crypto]`."
+        )
