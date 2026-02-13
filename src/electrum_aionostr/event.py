@@ -9,15 +9,14 @@ from enum import IntEnum
 from hashlib import sha256
 from typing import Optional
 
-import electrum_ecc as ecc
 from electrum_ecc import ECPrivkey, ECPubkey
 
 
 try:
-    import rapidjson
+    import orjson
 
-    loads = rapidjson.loads
-    dumps = functools.partial(rapidjson.dumps, ensure_ascii=False)
+    loads = orjson.loads
+    dumps = lambda obj: orjson.dumps(obj).decode()  # orjson.dumps returns bytes
 except ImportError:
     import json
 
