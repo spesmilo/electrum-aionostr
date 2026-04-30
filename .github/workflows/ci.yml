@@ -1,0 +1,47 @@
+name: CI tests
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:  # https://docs.github.com/en/actions/how-tos/manage-workflow-runs/manually-run-a-workflow
+
+concurrency:
+  # group the runs by ref (specific PR or master)
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # if a PR gets force pushed, cancel the current run and run the new one
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  unittests:
+    name: "unittests: Python ${{ matrix.python-version }}"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+          cache-dependency-path: pyproject.toml
+
+      - name: Install package with test+crypto extras
+        run: |
+            pip freeze --all  # to log pip/setuptools/wheel/etc versions
+            pip install ".[tests,crypto]"
+
+      - name: Show environment
+        run: |
+          python3 --version
+          pip freeze --all
+
+      - name: Run pytest
+        run: pytest tests --cov=electrum_aionostr

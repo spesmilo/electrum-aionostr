@@ -11,7 +11,7 @@ Language: Python (>= 3.10)
 
 
 [![Latest PyPI package](https://badge.fury.io/py/electrum-aionostr.svg)](https://pypi.org/project/electrum-aionostr/)
-[![Build Status](https://api.cirrus-ci.com/github/spesmilo/electrum-aionostr.svg)](https://cirrus-ci.com/github/spesmilo/electrum-aionostr)
+[![Tests](https://github.com/spesmilo/electrum-aionostr/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/spesmilo/electrum-aionostr/actions/workflows/ci.yml)
 
 
 This is a fork of [aionostr](https://github.com/davestgermain/aionostr) that does not require Coincurve.
