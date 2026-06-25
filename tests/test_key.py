@@ -1,7 +1,8 @@
 from hashlib import sha256
 import unittest
+from unittest.mock import patch
 
-from electrum_aionostr.key import PrivateKey, PublicKey
+from electrum_aionostr.key import PrivateKey, PublicKey, CryptoBackendUnavailableError
 
 
 bfh = bytes.fromhex
@@ -50,3 +51,13 @@ class TestKey(unittest.TestCase):
         ciphertext = privkey1.encrypt_message(msg1, privkey2.public_key.hex())
         self.assertEqual(msg1, privkey2.decrypt_message(ciphertext, privkey1.public_key.hex()))
         self.assertEqual(msg1, privkey1.decrypt_message(ciphertext, privkey2.public_key.hex()))
+
+    def test_crypto_backend_unavailable(self):
+        with patch('electrum_aionostr.key.AES_AVAILABLE', False):
+            key = PrivateKey()
+            random_pubkey = PrivateKey().public_key
+            key.compute_shared_secret(random_pubkey.hex())  # test some other functionality, shouldn't raise
+            with self.assertRaises(CryptoBackendUnavailableError):
+                key.encrypt_message(message="test", public_key_hex=random_pubkey.hex())
+            with self.assertRaises(CryptoBackendUnavailableError):
+                key.decrypt_message(encoded_message="test", public_key_hex=random_pubkey.hex())
