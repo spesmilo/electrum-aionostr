@@ -1,8 +1,7 @@
 import asyncio
 import secrets
 import logging
-import json
-from collections import defaultdict, namedtuple
+from collections import namedtuple
 from typing import Optional, Iterable, Dict, List, Set, Any, TYPE_CHECKING, AsyncGenerator
 from dataclasses import dataclass
 import time
@@ -12,6 +11,15 @@ import aiorpcx
 
 from .event import Event
 from .util import normalize_url
+
+try:
+    import orjson
+    loads = orjson.loads
+    dumps = lambda obj: orjson.dumps(obj).decode()  # orjson.dumps returns bytes
+except ImportError:
+    import json
+    loads = json.loads
+    dumps = json.dumps
 
 if TYPE_CHECKING:
     from logging import Logger
@@ -126,7 +134,7 @@ class Relay:
                 if len(message) > 64000:
                     self.log.debug(f"got too long message from {self.url=}: {len(message)=}")
                     continue  # not storing or handling msg > this limit
-                message = json.loads(message)
+                message = loads(message)
 
                 self.log.debug(message)  # FIXME spammy (or at least log which relay it's coming from)
                 if message[0] == 'EVENT':
@@ -167,10 +175,10 @@ class Relay:
 
     async def send(self, message):
         try:
-            await self.ws.send_str(json.dumps(message))
+            await self.ws.send_str(dumps(message))
         except client_exceptions.ClientConnectionError:
             await self.reconnect()
-            await self.ws.send_str(json.dumps(message))
+            await self.ws.send_str(dumps(message))
 
     async def add_event(self, event, check_response=False):
         if isinstance(event, Event):
